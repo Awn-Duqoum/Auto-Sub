@@ -6,6 +6,8 @@ from threading import Thread, Lock
 from multiprocessing import Process,Pipe
 from MessageBoard import MessageBoard
 from MaintainForward import MaintainForward
+from Controller_Operations import ControllerOps
+from Dive import Dive
 from MaintainDepth import MaintainDepth
 from GoToDepth import GoToDepth
 from ClockWiseTurn import ClockWiseTurn
@@ -26,6 +28,9 @@ class Submarine:
 		# Create variables to control the message passing between processes 
 		self.IMUParnetConn, self.IMUChildConn = Pipe()
 		self.depthParnetConn, self.depthChildConn = Pipe()
+		#self.controllerParentConn, self.controllerChildConn = Pipe()
+		# Create a variable to hold the state: stopped, auto, or manual controls
+		self._state = "idle"
 		# Make the message board
 		self._messageBoard = MessageBoard()
 		# Create the object
@@ -38,7 +43,9 @@ class Submarine:
 			self._upateAngles = False
 		else:
 			self._upateAngles = True
-		# Create the depth sensor object
+		# Create the joystick object
+		#self.joystick = controllerOps(self._messageBoard._JoystickFile,self.controllerChildConn)
+    # Create the depth sensor object
 		self.depthSensor = SubDepthSensor(self._messageBoard._DepthFile, self.depthChildConn, SaveSensorData)
 		# Check if we were able to connect to the depth sensor
 		if(self.depthSensor == None):
@@ -84,8 +91,46 @@ class Submarine:
 				self._messageBoard.LogMessage(message)
 			else:
 				self._depth = message
+
+	# This process is now done via Flask, commented it out in case we need to bring it back to the sub class
+	# def UpdateJoystick(self):
+	# 	# Check to see if Joystick sent a message
+	# 	if(self.controllerParentConn.poll()):
+	# 		message = self.controllerParentConn.recv()
+	# 		if (message):
+	# 			if isinstance(message, tuple) and self._state is "manual":
+	# 				# We only want to go here if we are set to manual mode
+	# 				left_forward = message[0] <= 0
+	# 				right_forward = message[1] <= 0
+	# 				packet = [abs(message[0]),left_forward, abs(message[1]),right_forward,self._servoAngle]
+	# 				self.UpdateMotorSpeed(packet)
+	#
+	# 			if isinstance(message, int) and self._state is "manual":
+	# 				# We only want to go here if we are set to manual mode
+	# 				# Must be a servo command
+	# 				packet = [None, None, None, None, message]
+	# 				self.UpdateMotorSpeed(packet)
+	#
+	# 			if isinstance(message, str):
+	# 				# Three possibilities: 'auto', 'manual', and 'stop' which toggle between the various modes
+	# 				# 'auto' flag is autonomous operation of the sub
+	# 				# 'manual' is control via the joystick
+	# 				# 'stop' freezes all motion, no auto or manual action
+	# 				self._state = message
+
+	def CheckSerial(self):
+		if(self._messageBoard._sPort.inWaiting()):
+			message = self._messageBoard._sPort.readline()
+			if( message != ''):
+				try:
+					message = message.decode('ascii')
+					if(message.find("[Log]") != -1):
+						self._messageBoard.LogMessage(message)
+				except:
+					message = ''
 	
 	def UpdateMotorSpeed(self,Packet):
+		# Packet format: [Left Speed%, BooleanForward, Right Speed%, BooleanForward, Servo Angle]
 		if(Packet == None or len(Packet) < 5):
 			return
 		
@@ -105,11 +150,13 @@ class Submarine:
 			self._SubMotors.SetServoAngle(Packet[4], Packet[5])
 			
 	def UpdateSubState(self):
+		self.CheckSerial()
+		#self.UpdateJoystick()
 		if(self._upateAngles):
 			self.UpdateAngles()
 		if(self._upateDepth):
 			self.UpdateDepth()
-		
+
 	# This will maintain a trajectory
 	def Forward (self, length):
 		self.UpdateSubState()
@@ -200,7 +247,6 @@ class Submarine:
 		
 	def ShutDown(self):
 		# Tell the IMU process to exits
-		print("Here fuck # 2")
-		self.IMUParnetConn.send("Close")
+	  self.IMUParnetConn.send("Close")
 		self.depthParnetConn.send("Close")
 		self._messageBoard.CloseBoard()
